@@ -7,43 +7,91 @@ import org.springframework.stereotype.Service;
 
 import com.nimbleways.springboilerplate.entities.Product;
 import com.nimbleways.springboilerplate.repositories.ProductRepository;
+import com.nimbleways.springboilerplate.services.interfaces.IProductService;
 
 @Service
-public class ProductService {
+public class ProductService implements IProductService {
 
-    @Autowired
-    ProductRepository pr;
+	@Autowired
+	private ProductRepository productRepository;
 
-    @Autowired
-    NotificationService ns;
+	@Autowired
+	private NotificationService notificationService;
 
-    public void notifyDelay(int leadTime, Product p) {
-        p.setLeadTime(leadTime);
-        pr.save(p);
-        ns.sendDelayNotification(leadTime, p.getName());
-    }
+	@Override
+	public void handleProduct(Product product) {
+		switch (product.getType()) {
+		case "NORMAL":
+			handleNormalProduct(product);
+			break;
+		case "SEASONAL":
+			handleSeasonalProduct(product);
+			break;
+		case "EXPIRABLE":
+			handleExpirableProduct(product);
+			break;
+		default:
+			throw new IllegalArgumentException("Type de produit inconnu : " + product.getType());
+		}
 
-    public void handleSeasonalProduct(Product p) {
-        if (LocalDate.now().plusDays(p.getLeadTime()).isAfter(p.getSeasonEndDate())) {
-            ns.sendOutOfStockNotification(p.getName());
-            p.setAvailable(0);
-            pr.save(p);
-        } else if (p.getSeasonStartDate().isAfter(LocalDate.now())) {
-            ns.sendOutOfStockNotification(p.getName());
-            pr.save(p);
-        } else {
-            notifyDelay(p.getLeadTime(), p);
-        }
-    }
+	}
 
-    public void handleExpiredProduct(Product p) {
-        if (p.getAvailable() > 0 && p.getExpiryDate().isAfter(LocalDate.now())) {
-            p.setAvailable(p.getAvailable() - 1);
-            pr.save(p);
-        } else {
-            ns.sendExpirationNotification(p.getName(), p.getExpiryDate());
-            p.setAvailable(0);
-            pr.save(p);
-        }
-    }
+	private void handleNormalProduct(Product product) {
+		if (product.getAvailable() > 0) {
+			decrementStock(product);
+		} else if (product.getLeadTime() > 0) {
+			notifyDelay(product.getLeadTime(), product);
+		}
+	}
+
+	private void handleSeasonalProduct(Product product) {
+		LocalDate today = LocalDate.now();
+		boolean isInSeason = !today.isBefore(product.getSeasonStartDate())
+				&& today.isBefore(product.getSeasonEndDate());
+
+		if (isInSeason && product.getAvailable() > 0) {
+			decrementStock(product);
+		} else {
+			handleSeasonalOutOfStock(product);
+		}
+	}
+
+	private void handleExpirableProduct(Product product) {
+		boolean isNotExpired = product.getExpiryDate().isAfter(LocalDate.now());
+
+		if (product.getAvailable() > 0 && isNotExpired) {
+			decrementStock(product);
+		} else {
+			notificationService.sendExpirationNotification(product.getName(), product.getExpiryDate());
+			product.setAvailable(0);
+			productRepository.save(product);
+		}
+	}
+
+	private void handleSeasonalOutOfStock(Product product) {
+		LocalDate today = LocalDate.now();
+		boolean seasonHasNotStarted = product.getSeasonStartDate().isAfter(today);
+		boolean leadTimeExceedsSeason = today.plusDays(product.getLeadTime()).isAfter(product.getSeasonEndDate());
+
+		if (leadTimeExceedsSeason || seasonHasNotStarted) {
+			notificationService.sendOutOfStockNotification(product.getName());
+			product.setAvailable(0);
+			productRepository.save(product);
+		} else {
+			notifyDelay(product.getLeadTime(), product);
+		}
+
+	}
+
+	private void decrementStock(Product product) {
+		product.setAvailable(product.getAvailable() - 1);
+		productRepository.save(product);
+	}
+
+	private void notifyDelay(int leadTime, Product product) {
+		product.setLeadTime(leadTime);
+		productRepository.save(product);
+		notificationService.sendDelayNotification(leadTime, product.getName());
+	}
+
 }
